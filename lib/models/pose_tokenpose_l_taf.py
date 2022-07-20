@@ -1,0 +1,64 @@
+# ------------------------------------------------------------------------------
+# Copyright (c) Microsoft
+# Licensed under the MIT License.
+# Written by Bin Xiao (Bin.Xiao@microsoft.com)
+# Modified by Yanjie Li (leeyegy@gmail.com)
+# ------------------------------------------------------------------------------
+
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
+import os
+import logging
+
+import torch
+import torch.nn as nn
+# import timm
+import math
+from .tokenpose_base import TokenPose_L_base_TAF #imports version w/ TAF
+from .hr_base import HRNET_base
+
+BN_MOMENTUM = 0.1
+logger = logging.getLogger(__name__)
+
+class TokenPose_L(nn.Module):
+
+    def __init__(self, cfg, **kwargs):
+ 
+        extra = cfg.MODEL.EXTRA #contains all the parameters such as PRETRAINED_LAYERS and FINAL_CONV_KERNAL
+        super(TokenPose_L, self).__init__()
+        print(cfg.MODEL)
+        ##################################################
+        print('before initializing pre_feature')
+        self.pre_feature = HRNET_base(cfg,**kwargs)
+        print('after initializing pre_feature')
+
+        #creates transformer version w TAF
+        self.transformer = TokenPose_L_base_TAF(feature_size=[cfg.MODEL.IMAGE_SIZE[1]//4,cfg.MODEL.IMAGE_SIZE[0]//4],patch_size=[cfg.MODEL.PATCH_SIZE[1],cfg.MODEL.PATCH_SIZE[0]],
+                            num_keypoints = cfg.MODEL.NUM_JOINTS,dim =cfg.MODEL.DIM,
+                            channels=cfg.MODEL.BASE_CHANNEL,
+                            depth=cfg.MODEL.TRANSFORMER_DEPTH,heads=cfg.MODEL.TRANSFORMER_HEADS,
+                            mlp_dim = cfg.MODEL.DIM*cfg.MODEL.TRANSFORMER_MLP_RATIO,
+                            apply_init=cfg.MODEL.INIT,
+                            hidden_heatmap_dim=cfg.MODEL.HIDDEN_HEATMAP_DIM, #384
+                            taf_heatmap_dim=cfg.MODEL.HEATMAP_SIZE[1]*cfg.MODEL.HEATMAP_SIZE[0]*cfg.MODEL.HEATMAP_SIZE[2], #48*64*2 = 6144
+                            heatmap_size=[cfg.MODEL.HEATMAP_SIZE[1],cfg.MODEL.HEATMAP_SIZE[0],cfg.MODEL.HEATMAP_SIZE[2]],
+                            pos_embedding_type=cfg.MODEL.POS_EMBEDDING_TYPE)
+        ###################################################3
+
+    def forward(self, x):
+        x = self.pre_feature(x)
+        x, x2 = self.transformer(x) #changed to return both x heatmaps, and x2 = paf maps
+        return x, x2
+
+    def init_weights(self, pretrained='', cfg=None):
+        self.pre_feature.init_weights(pretrained)
+
+
+def get_pose_net(cfg, is_train, **kwargs):
+    print('before initializing tokenpose_l')
+    model = TokenPose_L(cfg, **kwargs) #creates an object of the TokenPose_L class above
+    if is_train and cfg.MODEL.INIT_WEIGHTS:
+        model.init_weights(cfg.MODEL.PRETRAINED,cfg) #load_state_dict() called so that model is prepped (state_dict is a dictionary containing the mapping of layers to the tensors parameters of a model)
+    return model
